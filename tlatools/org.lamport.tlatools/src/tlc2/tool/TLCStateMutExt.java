@@ -129,6 +129,11 @@ public final class TLCStateMutExt extends TLCState implements Serializable {
     return this.values[loc];
   }
 
+  @Override
+  final IValue[] valuesByLocation() {
+    return this.values;
+  }
+
   public final boolean containsKey(UniqueString var) {
     return (this.lookup(var) != null);
   }

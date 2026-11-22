@@ -238,6 +238,15 @@ public abstract class TLCState implements Serializable {
 	}
 
 	/**
+	 * The array that holds this state's values at the variables' locations
+	 * ({@link UniqueString#getVarLoc()}), for read-only comparisons in this package; null if the
+	 * state keeps its values otherwise. Callers must not write to it.
+	 */
+	IValue[] valuesByLocation() {
+		return null;
+	}
+
+	/**
 	 * Determine if <code>s1</code> is a subset of <code>s2</code> (i.e. <code>s1</code> has the same value
 	 * as <code>s2</code> for every variable that <code>s2</code> has a value for).
 	 *
@@ -269,6 +278,33 @@ public abstract class TLCState implements Serializable {
 		// without inspecting the state's contents.
 		if (s1 == s2) {
 			return PartialBoolean.YES;
+		}
+
+		// Optimization: states that keep their values in an array indexed by the variable's
+		// location (TLCStateMut, TLCStateMutExt) are compared slot by slot, without the two
+		// lookup(key) calls per variable. SpecProcessor gives vars[i] the location i, so slot i is
+		// what lookup(vars[i].getName()) reads, and the loop below makes the same Objects.equals
+		// calls in the same order as the general loop (same result, same exceptions).
+		final IValue[] vals2 = s2.valuesByLocation();
+		if (vals2 != null) {
+			final IValue[] vals1 = s1.valuesByLocation();
+			if (vals1 != null && vals1.length == vals2.length && vals2.length == vars.length) {
+				try {
+					for (int i = 0; i < vals2.length; i++) {
+						final IValue val2 = vals2[i];
+						if (val2 != null) {
+							final IValue val1 = vals1[i];
+							if (val1 != val2 && (val1 == null || !val1.equals(val2))) {
+								return PartialBoolean.NO;
+							}
+						}
+					}
+				} catch (FingerprintException | Assert.TLCRuntimeException e) {
+					// These exceptions get thrown when two values are not comparable.
+					return PartialBoolean.MAYBE;
+				}
+				return PartialBoolean.YES;
+			}
 		}
 
 		try {
