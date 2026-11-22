@@ -31,6 +31,7 @@ import tlc2.util.IdThread;
 import tlc2.util.SetOfStates;
 import tlc2.util.statistics.FixedSizedBucketStatistics;
 import tlc2.util.statistics.IBucketStatistics;
+import tlc2.value.IValue;
 import tlc2.value.impl.CounterExample;
 import util.Assert;
 import util.Assert.TLCRuntimeException;
@@ -59,6 +60,13 @@ public final class Worker extends IdThread implements IWorker, INextStateFunctor
 	private final BufferedRandomAccessFile raf;
 	private final boolean checkDeadlock;
 
+	/** F2 invariant skip ({@link InvariantWork}): null when off. */
+	private final InvariantWork iw;
+	/** Per invariant: evaluations, and F2 skips (read by InvariantWork#report after the run). */
+	final long[] iwEval, iwSkip;
+	/** F2: this worker's changed-variable mask of the current successor. */
+	private final long[] iwChanged;
+
 	private long lastPtr;
 	private long statesGenerated;
 	private int unseenSuccessorStates = 0;
@@ -82,6 +90,11 @@ public final class Worker extends IdThread implements IWorker, INextStateFunctor
 
 		this.filename = metadir + FileUtil.separator + specFile + "-" + myGetId();
 		this.raf = new BufferedRandomAccessFile(filename + TLCTrace.EXT, "rw");
+		this.iw = this.tlc.invWork;
+		final int nInv = this.iw == null ? 0 : this.iw.names.length;
+		this.iwEval = new long[nInv];
+		this.iwSkip = new long[nInv];
+		this.iwChanged = this.iw == null ? null : new long[this.iw.words];
 	}
 
 	/**
@@ -457,7 +470,11 @@ public final class Worker extends IdThread implements IWorker, INextStateFunctor
 			
 			// Check if succState violates any invariant:
 			if (unseen) {
-				if (this.doNextCheckInvariants(curState, succState)) {
+				if (this.iw == null) {
+					if (this.doNextCheckInvariants(curState, succState)) {
+						throw new InvariantViolatedException();
+					}
+				} else if (this.doNextCheckInvariantsIW(curState, succState)) {
 					throw new InvariantViolatedException();
 				}
 			}
@@ -572,6 +589,79 @@ public final class Worker extends IdThread implements IWorker, INextStateFunctor
         {
 			this.tlc.doNextEvalFailed(curState, succState, EC.TLC_INVARIANT_EVALUATION_FAILED,
 					this.tool.getInvNames()[k], e);
+		}
+		return false;
+	}
+
+	/**
+	 * F2: sets in iwChanged the bit of every compared location whose value in succState is not
+	 * the identical object as in curState. False if the states do not keep their values in
+	 * arrays of locations: then every invariant counts as changed.
+	 */
+	private final boolean computeChanged(final TLCState curState, final TLCState succState) {
+		final IValue[] a = curState.valuesByLocation();
+		final IValue[] b = succState.valuesByLocation();
+		if (a == null || b == null || a.length != b.length) {
+			return false;
+		}
+		final long[] changed = this.iwChanged;
+		Arrays.fill(changed, 0L);
+		final int[] locs = this.iw.locs;
+		for (int i = 0; i < locs.length; i++) {
+			final int loc = locs[i];
+			if (a[loc] != b[loc]) {
+				changed[loc >>> 6] |= 1L << loc;
+			}
+		}
+		return true;
+	}
+
+	/** F2: invariant k must be evaluated (its mask is ALL, or overlaps the changed mask). */
+	private final boolean needed(final long[][] masks, final int k, final boolean known) {
+		final long[] m = masks[k];
+		if (m == null || !known) {
+			return true;
+		}
+		final long[] changed = this.iwChanged;
+		for (int i = 0; i < m.length; i++) {
+			if ((m[i] & changed[i]) != 0L) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * doNextCheckInvariants with the F2 invariant skip of {@link InvariantWork}: invariant k is
+	 * skipped when succState holds, for each variable k reads, the identical object as curState;
+	 * curState passed every invariant, so k holds in succState. The checks themselves and the
+	 * handling of a violation are doNextCheckInvariants's (the option is off under -continue): the
+	 * first violated invariant in the order of the config is reported, since every skipped one
+	 * holds.
+	 */
+	private final boolean doNextCheckInvariantsIW(final TLCState curState, final TLCState succState)
+			throws IOException, WorkerException, Exception {
+		final Action[] invs = this.tool.getInvariants();
+		final long[][] masks = this.iw.masks;
+		final boolean known = computeChanged(curState, succState);
+		int k = 0;
+		try {
+			for (k = 0; k < invs.length; k++) {
+				if (!needed(masks, k, known)) {
+					this.iwSkip[k]++;
+					continue;
+				}
+				this.iwEval[k]++;
+				if (!tool.isValid(invs[k], succState)) {
+					// The option is off under -continue (InvariantWork#create).
+					return this.doNextSetErr(curState, succState, false,
+							EC.TLC_INVARIANT_VIOLATED_BEHAVIOR, this.tool.getInvNames()[k]);
+				}
+			}
+		} catch (Exception e) {
+			this.tlc.doNextEvalFailed(curState, succState, EC.TLC_INVARIANT_EVALUATION_FAILED,
+					this.tool.getInvNames()[k], e);
+			return false;
 		}
 		return false;
 	}

@@ -76,6 +76,9 @@ public class ModelChecker extends AbstractChecker
 	 */
 	private boolean forceLiveCheck = false;
 
+	/** F2 invariant skip (see InvariantWork): null when off. */
+	final InvariantWork invWork;
+
     /* Constructors  */
     public ModelChecker(ITool tool, String metadir, final IStateWriter stateWriter, boolean deadlock, String fromChkpt,
             final Future<FPSet> future, long startTime) throws EvalException, IOException, InterruptedException, ExecutionException {
@@ -115,6 +118,7 @@ public class ModelChecker extends AbstractChecker
 			long startTime) throws EvalException, IOException    {
         // call the abstract constructor
         super(tool, metadir, stateWriter, deadlock, fromChkpt, startTime);
+        this.invWork = InvariantWork.create(tool);
 
         this.theStateQueue = IStateQueue.get(this.metadir);
 
@@ -912,6 +916,9 @@ public class ModelChecker extends AbstractChecker
         // the number states above.
 		MP.printMessage(EC.TLC_SEARCH_DEPTH,
 				String.valueOf(getStatesGenerated() == 0L ? 0 : this.trace.getLevelForReporting()));
+        if (this.invWork != null) {
+        	this.invWork.report(this.workers);
+        }
         if (success)
         {
 			

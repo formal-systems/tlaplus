@@ -256,6 +256,11 @@ public class MethodValue extends OpValue {
     }
   }
   
+  /** The Java method this value invokes (tlc2.tool.InvariantReads checks it is pure). */
+  public final Method getMethod() {
+	  return md;
+  }
+
   public final int getMinLevel() {
 	  return minLevel;
   }
