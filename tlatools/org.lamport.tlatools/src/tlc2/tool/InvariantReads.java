@@ -4,6 +4,7 @@ package tlc2.tool;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -27,12 +28,42 @@ import tla2sany.semantic.Subst;
 import tla2sany.semantic.SubstInNode;
 import tla2sany.semantic.SymbolNode;
 import tla2sany.semantic.ThmOrAssumpDefNode;
+import tlc2.module.Integers;
+import tlc2.module.Naturals;
+import tlc2.module.Sequences;
+import tlc2.module.Strings;
 import tlc2.util.Context;
+import tlc2.value.impl.BoolValue;
 import tlc2.value.impl.EvaluatingValue;
+import tlc2.value.impl.FcnLambdaValue;
+import tlc2.value.impl.FcnParams;
+import tlc2.value.impl.FcnRcdValue;
+import tlc2.value.impl.IntValue;
+import tlc2.value.impl.IntervalValue;
+import tlc2.value.impl.LazySupplierValue;
 import tlc2.value.impl.LazyValue;
 import tlc2.value.impl.MethodValue;
+import tlc2.value.impl.ModelValue;
 import tlc2.value.impl.OpValue;
+import tlc2.value.impl.RecordValue;
+import tlc2.value.impl.SetCapValue;
+import tlc2.value.impl.SetCupValue;
+import tlc2.value.impl.SetDiffValue;
+import tlc2.value.impl.SetEnumValue;
+import tlc2.value.impl.SetOfFcnsValue;
+import tlc2.value.impl.SetOfRcdsValue;
+import tlc2.value.impl.SetOfTuplesValue;
+import tlc2.value.impl.SetPredValue;
+import tlc2.value.impl.StringValue;
+import tlc2.value.impl.SubsetValue;
+import tlc2.value.impl.TupleValue;
+import tlc2.value.impl.UndefValue;
+import tlc2.value.impl.UnionValue;
+import tlc2.value.impl.UserObj;
+import tlc2.value.impl.UserValue;
 import tlc2.value.impl.Value;
+import tlc2.value.impl.ValueExcept;
+import tlc2.value.impl.ValueVec;
 
 /**
  * F2 invariant skip ({@link InvariantWork}): a static over-approximation of the state variables an
@@ -90,6 +121,15 @@ public final class InvariantReads {
 		String impure;
 		/** The lowest stack index of a definition in progress that this walk reached. */
 		int low = Integer.MAX_VALUE;
+		/** Values already inspected for this accumulator (guards recursive FcnLambdaValue cycles). */
+		Set<Value> seenValues;
+
+		boolean markValueSeen(final Value v) {
+			if (this.seenValues == null) {
+				this.seenValues = Collections.newSetFromMap(new IdentityHashMap<>());
+			}
+			return this.seenValues.add(v);
+		}
 
 		void setAll(final String why) {
 			if (this.all == null) {
@@ -161,20 +201,123 @@ public final class InvariantReads {
 	}
 
 	private void walkObject(final Object v, final Acc acc, final String what, final int depth) {
-		if (v instanceof LazyValue) {
-			final LazyValue lv = (LazyValue) v;
-			walkContext(lv.con, acc, depth + 1);
-			walk(lv.expr, acc);
+		if (v instanceof Value) {
+			walkValue((Value) v, acc, what, depth);
 		} else if (v instanceof OpDefNode) {
 			walkDef((OpDefNode) v, acc);
-		} else if (v instanceof OpValue) {
-			checkOverride((OpValue) v, acc, what);
-		} else if (v instanceof Value) {
-			// a constant
 		} else if (v instanceof SemanticNode) {
 			walk((SemanticNode) v, acc);
 		} else {
 			acc.setImpure("unexpected object " + v.getClass().getName() + " for " + what);
+		}
+	}
+
+	/**
+	 * Inspect a runtime {@link Value} (e.g. a constant-folded definition or a context binding).
+	 * Constant-level folding can leave unevaluated ASTs inside {@link FcnLambdaValue} or
+	 * {@link SetPredValue} (directly or nested inside compound values), so those bodies must be
+	 * walked instead of assuming every {@link Value} is a pure constant.
+	 */
+	private void walkValue(final Value v, final Acc acc, final String what, final int depth) {
+		if (v == null || !acc.markValueSeen(v)) {
+			return;
+		}
+		if (v instanceof BoolValue || v instanceof IntValue || v instanceof StringValue
+				|| v instanceof ModelValue || v instanceof IntervalValue || v instanceof UndefValue) {
+			return;
+		}
+		if (v instanceof LazySupplierValue) {
+			acc.setImpure("lazy supplier value for " + what);
+		} else if (v instanceof LazyValue) {
+			final LazyValue lv = (LazyValue) v;
+			walkContext(lv.con, acc, depth + 1);
+			walk(lv.expr, acc);
+		} else if (v instanceof OpValue) {
+			checkOverride((OpValue) v, acc, what);
+		} else if (v instanceof FcnLambdaValue) {
+			final FcnLambdaValue fcn = (FcnLambdaValue) v;
+			final FcnRcdValue rcd = fcn.getRcd();
+			if (rcd != null) {
+				walkValue(rcd, acc, what, depth + 1);
+			} else {
+				final FcnParams params = fcn.getParams();
+				if (params != null) {
+					walkValues(params.domains, acc, what, depth + 1);
+				}
+				final ValueExcept[] excepts = fcn.getExcepts();
+				if (excepts != null) {
+					for (int i = 0; i < excepts.length; i++) {
+						walkValues(excepts[i].path, acc, what, depth + 1);
+						walkValue(excepts[i].value, acc, what, depth + 1);
+					}
+				}
+				walkContext(fcn.getCon(), acc, depth + 1);
+				walk(fcn.getBody(), acc);
+			}
+		} else if (v instanceof SetPredValue) {
+			final SetPredValue spv = (SetPredValue) v;
+			walkValue(spv.inVal, acc, what, depth + 1);
+			walkContext(spv.con, acc, depth + 1);
+			walk(spv.pred, acc);
+		} else if (v instanceof TupleValue) {
+			walkValues(((TupleValue) v).elems, acc, what, depth + 1);
+		} else if (v instanceof RecordValue) {
+			walkValues(((RecordValue) v).values, acc, what, depth + 1);
+		} else if (v instanceof FcnRcdValue) {
+			final FcnRcdValue fcn = (FcnRcdValue) v;
+			walkValues(fcn.domain, acc, what, depth + 1);
+			walkValues(fcn.values, acc, what, depth + 1);
+		} else if (v instanceof SetEnumValue) {
+			final ValueVec elems = ((SetEnumValue) v).elems;
+			if (elems != null) {
+				for (int i = 0; i < elems.size(); i++) {
+					walkValue(elems.elementAt(i), acc, what, depth + 1);
+				}
+			}
+		} else if (v instanceof SetCupValue) {
+			final SetCupValue s = (SetCupValue) v;
+			walkValue(s.set1, acc, what, depth + 1);
+			walkValue(s.set2, acc, what, depth + 1);
+		} else if (v instanceof SetCapValue) {
+			final SetCapValue s = (SetCapValue) v;
+			walkValue(s.set1, acc, what, depth + 1);
+			walkValue(s.set2, acc, what, depth + 1);
+		} else if (v instanceof SetDiffValue) {
+			final SetDiffValue s = (SetDiffValue) v;
+			walkValue(s.set1, acc, what, depth + 1);
+			walkValue(s.set2, acc, what, depth + 1);
+		} else if (v instanceof SubsetValue) {
+			walkValue(((SubsetValue) v).set, acc, what, depth + 1);
+		} else if (v instanceof UnionValue) {
+			walkValue(((UnionValue) v).set, acc, what, depth + 1);
+		} else if (v instanceof SetOfFcnsValue) {
+			final SetOfFcnsValue s = (SetOfFcnsValue) v;
+			walkValue(s.domain, acc, what, depth + 1);
+			walkValue(s.range, acc, what, depth + 1);
+		} else if (v instanceof SetOfRcdsValue) {
+			walkValues(((SetOfRcdsValue) v).values, acc, what, depth + 1);
+		} else if (v instanceof SetOfTuplesValue) {
+			walkValues(((SetOfTuplesValue) v).sets, acc, what, depth + 1);
+		} else if (v instanceof UserValue) {
+			final UserObj obj = ((UserValue) v).userObj;
+			if (obj instanceof Naturals || obj instanceof Integers || obj instanceof Strings) {
+				return;
+			} else if (obj instanceof Sequences) {
+				walkValue(((Sequences) obj).getRange(), acc, what, depth + 1);
+			} else {
+				acc.setImpure("user value " + (obj == null ? "null" : obj.getClass().getName()) + " for " + what);
+			}
+		} else {
+			acc.setImpure("unexpected value " + v.getClass().getName() + " for " + what);
+		}
+	}
+
+	private void walkValues(final Value[] vals, final Acc acc, final String what, final int depth) {
+		if (vals == null) {
+			return;
+		}
+		for (int i = 0; i < vals.length; i++) {
+			walkValue(vals[i], acc, what, depth);
 		}
 	}
 
@@ -254,12 +397,8 @@ public final class InvariantReads {
 			}
 		} else if (val instanceof ThmOrAssumpDefNode) {
 			walk(((ThmOrAssumpDefNode) val).getBody(), acc);
-		} else if (val instanceof OpValue) {
-			checkOverride((OpValue) val, acc, op.getName().toString());
-		} else if (val instanceof LazyValue) {
-			walkObject(val, acc, op.getName().toString(), 0);
 		} else if (val instanceof Value) {
-			// a constant (a CONSTANT's value, or a constant definition evaluated at startup)
+			walkValue((Value) val, acc, op.getName().toString(), 0);
 		} else if (val == op) {
 			// A declaration that resolves to itself: the evaluator reads the state variable of its
 			// name (a VARIABLE, or a parameter of an instantiated module whose substitution was

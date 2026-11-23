@@ -118,7 +118,7 @@ public class ModelChecker extends AbstractChecker
 			long startTime) throws EvalException, IOException    {
         // call the abstract constructor
         super(tool, metadir, stateWriter, deadlock, fromChkpt, startTime);
-        this.invWork = InvariantWork.create(tool);
+        this.invWork = InvariantWork.create(tool, fromChkpt != null);
 
         this.theStateQueue = IStateQueue.get(this.metadir);
 

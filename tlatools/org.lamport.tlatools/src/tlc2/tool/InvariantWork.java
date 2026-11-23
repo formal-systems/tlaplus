@@ -12,26 +12,36 @@ import util.ToolIO;
 
 /**
  * F2, invariant skip: less invariant work in the BFS model checker, with the same results. On by
- * default; {@code -Dtlc2.tool.Worker.invariantSkip=false} turns it off.
+ * default; {@code -Dtlc2.tool.Worker.invariantSkip=false} turns it off. Diagnostics are silent by
+ * default; {@code -Dtlc2.tool.Worker.invariantSkip.report=true} enables {@code invwork:} lines.
  * <p>
  * Invariant k is not evaluated in a successor that holds, for every variable k reads
  * ({@link InvariantReads}), the identical object as its parent. The parent passed every invariant
  * (without -continue only states that passed are enqueued), so k holds in the successor. Off under
- * -continue and in the debugger.
+ * -continue, -coverage, -recover, and in the debugger.
  * <p>
  * Only {@link Worker} (BFS) uses it: not the initial states, not the simulator, not DFID.
  */
 public final class InvariantWork {
 
 	public static final String INVARIANT_SKIP = Worker.class.getName() + ".invariantSkip";
+	public static final String INVARIANT_SKIP_REPORT = INVARIANT_SKIP + ".report";
 
 	private static final String P = "invwork: ";
 
+	private static boolean reportEnabled() {
+		return Boolean.parseBoolean(System.getProperty(INVARIANT_SKIP_REPORT, "false"));
+	}
+
 	/**
-	 * One statistics line. With -tool every line TLC prints must be inside a message frame, so the
-	 * line goes out as an EC.GENERAL message there; otherwise it is printed as is.
+	 * One statistics line, emitted only when {@link #INVARIANT_SKIP_REPORT} is enabled. With -tool
+	 * every line TLC prints must be inside a message frame, so the line goes out as an EC.GENERAL
+	 * message there; otherwise it is printed as is.
 	 */
 	private static void say(final String line) {
+		if (!reportEnabled()) {
+			return;
+		}
 		if (TLCGlobals.tool) {
 			MP.printMessage(EC.GENERAL, P + line);
 		} else {
@@ -57,8 +67,13 @@ public final class InvariantWork {
 		this.names = names;
 	}
 
-	/** Null when off. Prints what is on, and why it is off. */
+	/** Null when off. */
 	static InvariantWork create(final ITool tool) {
+		return create(tool, false);
+	}
+
+	/** Null when off. Emits diagnostics when {@link #INVARIANT_SKIP_REPORT} is true. */
+	static InvariantWork create(final ITool tool, final boolean recovering) {
 		final boolean skip = Boolean.parseBoolean(System.getProperty(INVARIANT_SKIP, "true"));
 		if (!skip) {
 			return null;
@@ -72,6 +87,10 @@ public final class InvariantWork {
 			off = "-continue"; // a parent may have failed an invariant
 		} else if (tool.getMode() == Mode.MC_DEBUG) {
 			off = "the debugger";
+		} else if (TLCGlobals.isCoverageEnabled()) {
+			off = "-coverage"; // preserve exact invariant cost-model counts
+		} else if (recovering) {
+			off = "-recover"; // checkpointed parents may predate current flags or invariants
 		} else if (invs.length == 0) {
 			off = "no invariants";
 		}
@@ -114,6 +133,9 @@ public final class InvariantWork {
 
 	/** The end lines: per invariant, the evaluations done and skipped. */
 	void report(final IWorker[] workers) {
+		if (!reportEnabled()) {
+			return;
+		}
 		final long[] eval = new long[this.names.length], skipped = new long[this.names.length];
 		for (final IWorker t : workers) {
 			if (t instanceof Worker) {

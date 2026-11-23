@@ -41,6 +41,11 @@ public class Sequences extends UserObj implements ValueConstants
         this.size = size;
     }
 
+    public Value getRange()
+    {
+        return this.range;
+    }
+
 	static
     {
 		// This entry in TLARegistry defines a mapping from TLA+' infix

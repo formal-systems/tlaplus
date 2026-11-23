@@ -601,7 +601,7 @@ public final class Worker extends IdThread implements IWorker, INextStateFunctor
 	private final boolean computeChanged(final TLCState curState, final TLCState succState) {
 		final IValue[] a = curState.valuesByLocation();
 		final IValue[] b = succState.valuesByLocation();
-		if (a == null || b == null || a.length != b.length) {
+		if (a == null || b == null || a.length != b.length || a.length != TLCState.vars.length) {
 			return false;
 		}
 		final long[] changed = this.iwChanged;

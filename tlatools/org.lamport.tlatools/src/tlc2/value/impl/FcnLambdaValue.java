@@ -823,4 +823,8 @@ public class FcnLambdaValue extends Value implements FunctionValue, IFcnLambdaVa
 	public boolean hasRcd() {
 		return fcnRcd != null;
 	}
+
+	public ValueExcept[] getExcepts() {
+		return excepts;
+	}
 }
