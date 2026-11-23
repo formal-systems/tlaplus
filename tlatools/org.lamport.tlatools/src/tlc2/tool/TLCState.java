@@ -294,7 +294,7 @@ public abstract class TLCState implements Serializable {
 						final IValue val2 = vals2[i];
 						if (val2 != null) {
 							final IValue val1 = vals1[i];
-							if (val1 != val2 && (val1 == null || !val1.equals(val2))) {
+							if (!Objects.equals(val1, val2)) {
 								return PartialBoolean.NO;
 							}
 						}

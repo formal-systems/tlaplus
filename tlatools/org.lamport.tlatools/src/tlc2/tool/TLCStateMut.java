@@ -56,6 +56,10 @@ public final class TLCStateMut extends TLCState implements Serializable {
   
   public static void setVariables(OpDeclNode[] variables) 
   {
+      for (int i = 0; i < variables.length; i++) {
+          assert variables[i].getName().getVarLoc() == i
+              : "variable " + variables[i].getName() + " has varLoc " + variables[i].getName().getVarLoc() + " != " + i;
+      }
       vars = variables;
       IValue[] vals = new IValue[vars.length];
       Empty = new TLCStateMut(vals);
